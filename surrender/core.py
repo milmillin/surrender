@@ -1,6 +1,7 @@
 import numpy as np
 import numpy.typing as npt
-import pyoctree.pyoctree as ot
+import pyembree.rtcore_scene as rtcs
+from pyembree.mesh_construction import TriangleMesh
 
 from typing import Optional, Any
 
@@ -196,28 +197,35 @@ def render(
     height *= spp
 
     cam_pos = np.array(cam_pos)
-    tree = ot.PyOctree(V, F)
     rays = _generate_rays(cam_pos, width, height, fov=fov)
+    orgs = rays[:, :, 0, :].reshape(-1, 3)
+    dirs = rays[:, :, 1, :].reshape(-1, 3) - orgs
+
+    triangles = V[F]  # (n_F, 3, 3)
+
+    scene = rtcs.EmbreeScene()
+    mesh = TriangleMesh(scene, triangles)
+    intersections = scene.run(orgs, dirs, output=1)
 
     if N is None:
         V0 = V[F[:, 0]]
         N = _normalize(np.cross(V[F[:, 1]] - V0, V[F[:, 2]] - V0))
     C = C or np.ones((len(F), 3))
 
-    canvas = np.ones((height, width, 3), dtype=np.float32)
+    u = intersections["u"].reshape(height, width)
+    v = intersections["v"].reshape(height, width)
+    w = 1 - u - v
+    fid = intersections["primID"].reshape(height, width)
+    p = (triangles[fid] * np.stack([w, u, v], axis=-1)[..., np.newaxis]).sum(
+        axis=-2
+    )  # (h, w, 3)
+    v = _normalize(cam_pos - p)  # (h, w, 3)
+    l = v
+    n = N[fid]  # (h, w, 3)
+    diffuse = C[fid]  # (h, w, 3)
 
-    for iy in range(height):
-        for ix in range(width):
-            intersections = tree.rayIntersection(rays[iy, ix])
-            if len(intersections) == 0:
-                continue
-            intersections = [(i.triLabel, i.s, i.p) for i in intersections]
-            intersections.sort(key=lambda x: x[1])
-            fid, dist, p = intersections[0]
-            v = _normalize(cam_pos - p)
-            l = v  # TODO
-
-            canvas[iy, ix] = C[fid] * (np.dot(l, N[fid])) ** 0.45
+    canvas = diffuse * (np.abs(l * n).sum(axis=-1)[..., np.newaxis] ** 0.45)
+    canvas = np.where((fid == -1)[..., np.newaxis], 1.0, canvas)
 
     if spp != 1:
         canvas = (
