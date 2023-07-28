@@ -194,7 +194,8 @@ def render(
     if N is None:
         V0 = V[F[:, 0]]
         N = _normalize(np.cross(V[F[:, 1]] - V0, V[F[:, 2]] - V0))
-    C = C or np.ones((len(F), 3))
+    if C is None:
+        C = np.ones((len(F), 3))
 
     width *= spp
     height *= spp
