@@ -1,9 +1,8 @@
 import numpy as np
 import numpy.typing as npt
-import pyembree.rtcore_scene as rtcs
-from pyembree.mesh_construction import TriangleMesh
+import embree
 
-from typing import Optional, Any
+from typing import Optional, Any, cast
 
 
 def _normalize(x: np.ndarray, axis: int = -1) -> np.ndarray:
@@ -191,7 +190,11 @@ def render(
     """
 
     V = V.astype(np.float32)
-    F = F.astype(np.int32)
+    F = F.astype(np.uint32)
+    if N is None:
+        V0 = V[F[:, 0]]
+        N = _normalize(np.cross(V[F[:, 1]] - V0, V[F[:, 2]] - V0))
+    C = C or np.ones((len(F), 3))
 
     width *= spp
     height *= spp
@@ -203,19 +206,39 @@ def render(
 
     triangles = V[F]  # (n_F, 3, 3)
 
-    scene = rtcs.EmbreeScene()
-    mesh = TriangleMesh(scene, triangles)
-    intersections = scene.run(orgs, dirs, output=1)
+    device = embree.Device()
+    scene = device.make_scene()
+    geometry = device.make_geometry(embree.GeometryType.Triangle)
+    vert = geometry.set_new_buffer(
+        embree.BufferType.Vertex, 0, embree.Format.Float3, 3 * np.float32().itemsize, len(V)
+    )
+    vert[:] = V
+    index = geometry.set_new_buffer(
+        embree.BufferType.Index, 0, embree.Format.Uint3, 3 * np.uint32().itemsize, len(F)
+    )
+    index[:] = F
+    geometry.commit()
+    scene.attach_geometry(geometry)
+    scene.commit()
 
-    if N is None:
-        V0 = V[F[:, 0]]
-        N = _normalize(np.cross(V[F[:, 1]] - V0, V[F[:, 2]] - V0))
-    C = C or np.ones((len(F), 3))
+    rayhit = embree.RayHit1M(len(orgs))
+    rayhit.org[:] = orgs
+    rayhit.dir[:] = dirs
+    rayhit.tnear[:] = 0
+    rayhit.tfar[:] = np.inf
+    rayhit.flags[:] = 0
+    rayhit.uv[:] = 0
+    rayhit.geom_id[:] = embree.INVALID_GEOMETRY_ID
+    rayhit.prim_id[:] = embree.INVALID_GEOMETRY_ID
 
-    u = intersections["u"].reshape(height, width)
-    v = intersections["v"].reshape(height, width)
+    context = embree.IntersectContext()
+    scene.intersect1M(context, rayhit)
+
+    u = cast(np.ndarray, rayhit.uv)[:, 0].reshape(height, width)
+    v = cast(np.ndarray, rayhit.uv)[:, 1].reshape(height, width)
     w = 1 - u - v
-    fid = intersections["primID"].reshape(height, width)
+    fid = cast(np.ndarray, rayhit.prim_id).reshape(height, width).astype(np.int32)
+    fid[fid == embree.INVALID_GEOMETRY_ID] = -1
     p = (triangles[fid] * np.stack([w, u, v], axis=-1)[..., np.newaxis]).sum(
         axis=-2
     )  # (h, w, 3)

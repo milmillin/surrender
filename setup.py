@@ -9,5 +9,5 @@ setup(
     author_email="milink@cs.washington.edu",
     license="MIT",
     packages=["surrender"],
-    install_requires=["numpy", "pyembree"],
+    install_requires=["numpy", "embree"],
 )
