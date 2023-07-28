@@ -177,12 +177,20 @@ def render(
     spp: int = 1,
 ) -> np.ndarray:
     """
-    V: (n_V, 3)
-    F: (n_F, 3)
-    N: (n_F, 3)
-    C: (n_F, 3): [0, 1)
-    fov: radians
+    Renders a mesh.
+
+    V: (n_V, 3): vertices
+    F: (n_F, 3): faces
+    height, width: output image dimension
+    N: (n_F, 3): face normals
+    C: (n_F, 3): [0, 1): face colors
+    cam_pos: camera position
+    fov: field of view in radians
+    spp: sqrt(samples per pixel)
     """
+
+    V = V.astype(np.float32)
+    F = F.astype(np.int32)
 
     width *= spp
     height *= spp
